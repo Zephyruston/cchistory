@@ -20,7 +20,9 @@ Multiple concurrent Claude Code sessions are safe via `flock` file locking; each
 ## Features
 
 - **Automatic recording** — hook into Claude Code's `PostToolUse` event, no manual steps after setup
+- **Multi-line commands** — heredocs, backslash continuations stored via YAML block scalar (`|`) format
 - **Fish-compatible format** — history stored in the same YAML-like format fish uses (`- cmd: ...` / `  when: ...`)
+- **Local timezone display** — timestamps shown in your machine's local time, newest-first by default
 - **`less` pager** — output pipes through `less -R -F -X` when stdout is a terminal
 - **Search & delete** — contains, exact, and prefix matching; case-sensitive or insensitive
 - **Concurrency-safe** — `flock` shared locks for reads, exclusive locks for writes; TOCTOU-free deletes
@@ -173,7 +175,7 @@ Removes all history entries. No confirmation prompt.
 
 ### `merge [FILE]`
 
-Merges entries from another cchistory file or stdin.
+Merges entries from another cchistory file. Reads from stdin when piped; shows an error if no file is given and stdin is a terminal.
 
 ### `completions <SHELL>`
 
@@ -193,6 +195,18 @@ Stored at `$XDG_DATA_HOME/cchistory/history` (defaults to `~/.local/share/cchist
   cwd: /home/user/project
 ```
 
+Multi-line commands (heredocs, backslash continuations) use YAML literal block scalar:
+
+```
+- cmd: |
+    python3 << 'PYEOF'
+    import re
+    print("hello")
+    PYEOF
+  when: 1715600002
+  cwd: /home/user/project
+```
+
 Compatible with fish's history file format — you can even point fish at it for debugging.
 
 ## Build & test
@@ -200,5 +214,5 @@ Compatible with fish's history file format — you can even point fish at it for
 ```bash
 cargo build              # dev build → target/debug/cchistory
 cargo build --release    # release build → target/release/cchistory
-cargo test               # run 20 unit tests (parsing, search, locking, format)
+cargo test               # run 25 unit tests (parsing, multi-line, search, locking, format)
 ```

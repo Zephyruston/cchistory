@@ -166,10 +166,30 @@ fn parse_all<R: BufRead>(reader: R) -> io::Result<Vec<Entry>> {
     let mut entries = Vec::new();
     let mut current = EntryBuilder::new();
     let mut lines = reader.lines();
+    let mut in_block = false;
 
     while let Some(line) = lines.next() {
         let line = line?;
-        if let Some(stripped) = line.strip_prefix("- cmd: ") {
+
+        if in_block {
+            if let Some(content) = line.strip_prefix("    ") {
+                current.block_lines.push(content.to_string());
+                continue;
+            } else if line.trim().is_empty() {
+                current.block_lines.push(String::new());
+                continue;
+            }
+            // Non-empty line without 4-space indent ends the block
+            in_block = false;
+        }
+
+        if line == "- cmd: |" {
+            if let Some(entry) = current.build() {
+                entries.push(entry);
+            }
+            current = EntryBuilder::new();
+            in_block = true;
+        } else if let Some(stripped) = line.strip_prefix("- cmd: ") {
             if let Some(entry) = current.build() {
                 entries.push(entry);
             }
@@ -186,7 +206,13 @@ fn parse_all<R: BufRead>(reader: R) -> io::Result<Vec<Entry>> {
             while let Some(next) = lines.next() {
                 let next = next?;
                 if !next.starts_with("    - ") && !next.trim().is_empty() {
-                    if let Some(stripped) = next.strip_prefix("- cmd: ") {
+                    if next == "- cmd: |" {
+                        if let Some(entry) = current.build() {
+                            entries.push(entry);
+                        }
+                        current = EntryBuilder::new();
+                        in_block = true;
+                    } else if let Some(stripped) = next.strip_prefix("- cmd: ") {
                         if let Some(entry) = current.build() {
                             entries.push(entry);
                         }
@@ -211,6 +237,7 @@ struct EntryBuilder {
     when: Option<i64>,
     cwd: Option<String>,
     exit_code: Option<i32>,
+    block_lines: Vec<String>,
 }
 
 impl EntryBuilder {
@@ -220,10 +247,14 @@ impl EntryBuilder {
             when: None,
             cwd: None,
             exit_code: None,
+            block_lines: Vec::new(),
         }
     }
 
-    fn build(self) -> Option<Entry> {
+    fn build(mut self) -> Option<Entry> {
+        if self.command.is_none() && !self.block_lines.is_empty() {
+            self.command = Some(self.block_lines.join("\n"));
+        }
         self.command.map(|cmd| Entry {
             command: cmd,
             when: self.when.unwrap_or_else(|| chrono::Utc::now().timestamp()),
@@ -236,7 +267,14 @@ impl EntryBuilder {
 // ---- Serialization ----
 
 fn write_entry<W: Write>(writer: &mut W, entry: &Entry) -> io::Result<()> {
-    writeln!(writer, "- cmd: {}", entry.command)?;
+    if entry.command.contains('\n') {
+        writeln!(writer, "- cmd: |")?;
+        for line in entry.command.lines() {
+            writeln!(writer, "    {}", line)?;
+        }
+    } else {
+        writeln!(writer, "- cmd: {}", entry.command)?;
+    }
     writeln!(writer, "  when: {}", entry.when)?;
     if let Some(ref cwd) = entry.cwd {
         writeln!(writer, "  cwd: {}", cwd)?;
@@ -282,7 +320,11 @@ fn make_predicate(
 pub fn format_entry(entry: &Entry, show_time: bool) -> String {
     if show_time {
         let dt = chrono::DateTime::from_timestamp(entry.when, 0)
-            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+            .map(|dt| {
+                dt.with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d %H:%M:%S")
+                    .to_string()
+            })
             .unwrap_or_else(|| entry.when.to_string());
         format!("  {}  {}", dt, entry.command)
     } else {
@@ -376,6 +418,92 @@ mod tests {
         assert_eq!(parsed[1].command, "ls -la");
         assert_eq!(parsed[1].cwd, None);
         assert_eq!(parsed[1].exit_code, None);
+    }
+
+    #[test]
+    fn write_round_trip_multiline_heredoc() {
+        let original = vec![Entry {
+            command: "python3 << 'PYEOF'\nimport re\nprint('hello')\nPYEOF".into(),
+            when: 1715600000,
+            cwd: Some("/home/user/project".into()),
+            exit_code: Some(0),
+        }];
+        let serialized = write_to_string(&original);
+        let parsed = parse_str(&serialized);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(
+            parsed[0].command,
+            "python3 << 'PYEOF'\nimport re\nprint('hello')\nPYEOF"
+        );
+        assert_eq!(parsed[0].when, 1715600000);
+        assert_eq!(parsed[0].cwd.as_deref(), Some("/home/user/project"));
+        assert_eq!(parsed[0].exit_code, Some(0));
+    }
+
+    #[test]
+    fn write_round_trip_multiline_backslash() {
+        let original = vec![Entry {
+            command: "sed -i \\\n  -e 's/foo/bar/g' \\\n  output.md".into(),
+            when: 1715600000,
+            cwd: None,
+            exit_code: None,
+        }];
+        let serialized = write_to_string(&original);
+        let parsed = parse_str(&serialized);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(
+            parsed[0].command,
+            "sed -i \\\n  -e 's/foo/bar/g' \\\n  output.md"
+        );
+        assert_eq!(parsed[0].when, 1715600000);
+    }
+
+    #[test]
+    fn parse_mixed_single_and_multiline() {
+        let input = "\
+- cmd: git status
+  when: 1
+- cmd: |
+    echo hello
+    echo world
+  when: 2
+- cmd: ls -la
+  when: 3
+";
+        let entries = parse_str(input);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].command, "git status");
+        assert_eq!(entries[1].command, "echo hello\necho world");
+        assert_eq!(entries[2].command, "ls -la");
+    }
+
+    #[test]
+    fn write_round_trip_multiline_with_empty_lines() {
+        let original = vec![Entry {
+            command: "python3 << 'EOF'\n\nprint('hello')\n\nEOF".into(),
+            when: 1715600000,
+            cwd: None,
+            exit_code: None,
+        }];
+        let serialized = write_to_string(&original);
+        let parsed = parse_str(&serialized);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(
+            parsed[0].command,
+            "python3 << 'EOF'\n\nprint('hello')\n\nEOF"
+        );
+    }
+
+    #[test]
+    fn single_line_pipe_character_not_confused_with_block() {
+        // A command containing a pipe should NOT trigger block mode
+        let input = "\
+- cmd: echo foo | bar
+  when: 1
+";
+        let entries = parse_str(input);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].command, "echo foo | bar");
     }
 
     // -- Search mode tests --

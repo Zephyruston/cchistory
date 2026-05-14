@@ -182,6 +182,11 @@ fn main() -> Result<()> {
             let hist = History::new()?;
             let count = if let Some(ref path) = file {
                 hist.merge_file(path)?
+            } else if io::stdin().is_terminal() {
+                eprintln!("Error: merge requires a file argument or piped input from stdin");
+                eprintln!("Usage: cchistory merge <FILE>");
+                eprintln!("       some_command | cchistory merge");
+                std::process::exit(1);
             } else {
                 hist.merge_stdin()?
             };
@@ -202,7 +207,8 @@ fn apply_limit_and_reverse(
     reverse: bool,
     max: Option<usize>,
 ) -> Vec<Entry> {
-    if reverse {
+    // Default: newest first (reverse file order). --reverse: oldest first.
+    if !reverse {
         entries.reverse();
     }
     if let Some(n) = max {
@@ -264,7 +270,7 @@ fn display_with_pager(entries: &[Entry], show_time: bool) -> Result<()> {
         .iter()
         .map(|e| format_entry(e, show_time))
         .collect::<Vec<_>>()
-        .join("\n");
+        .join("\n\n");
 
     let stdout = io::stdout();
     if stdout.is_terminal() && !entries.is_empty() {

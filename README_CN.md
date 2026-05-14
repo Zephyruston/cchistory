@@ -20,7 +20,9 @@
 ## 特性
 
 - **自动记录** — 挂载到 Claude Code 的 `PostToolUse` 事件，一次配置，永久生效
+- **多行命令** — heredoc、反斜杠续行等通过 YAML 字面量块标量（`|`）格式存储
 - **Fish 兼容格式** — 使用与 fish 相同的 YAML 风格格式（`- cmd: ...` / `  when: ...`）
+- **本地时区显示** — 时间戳按本机时区显示，默认最新在前
 - **`less` 分页器** — stdout 是终端时自动 pipe 到 `less -R -F -X`
 - **搜索与删除** — 支持包含、精确、前缀三种匹配模式，区分/忽略大小写
 - **并发安全** — `flock` 读共享锁 + 写互斥锁，删除操作消除 TOCTOU 竞态窗口
@@ -172,7 +174,7 @@ cchistory [COMMAND]
 
 ### `merge [文件]`
 
-从其他 cchistory 历史文件或 stdin 合并条目。
+从其他 cchistory 历史文件合并条目。支持管道输入；stdin 是终端且未指定文件时会报错。
 
 ### `completions <SHELL>`
 
@@ -192,6 +194,18 @@ cchistory [COMMAND]
   cwd: /home/user/project
 ```
 
+多行命令（heredoc、反斜杠续行）使用 YAML 字面量块标量格式：
+
+```
+- cmd: |
+    python3 << 'PYEOF'
+    import re
+    print("hello")
+    PYEOF
+  when: 1715600002
+  cwd: /home/user/project
+```
+
 与 fish 的历史文件格式兼容 — 必要时候甚至可以直接用 fish 打开查看。
 
 ## 构建与测试
@@ -199,5 +213,5 @@ cchistory [COMMAND]
 ```bash
 cargo build              # 开发构建 → target/debug/cchistory
 cargo build --release    # 发布构建 → target/release/cchistory
-cargo test               # 运行 20 个单元测试（解析、搜索、锁、格式）
+cargo test               # 运行 25 个单元测试（解析、多行、搜索、锁、格式）
 ```
