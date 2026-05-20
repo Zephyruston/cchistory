@@ -268,7 +268,8 @@ fn append_from_stdin() -> Result<()> {
 fn display_with_pager(entries: &[Entry], show_time: bool) -> Result<()> {
     let output = entries
         .iter()
-        .map(|e| format_entry(e, show_time))
+        .enumerate()
+        .map(|(i, e)| format_entry(e, i + 1, show_time))
         .collect::<Vec<_>>()
         .join("\n\n");
 

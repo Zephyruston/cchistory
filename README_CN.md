@@ -22,6 +22,7 @@
 - **自动记录** — 挂载到 Claude Code 的 `PostToolUse` 事件，一次配置，永久生效
 - **多行命令** — heredoc、反斜杠续行等通过 YAML 字面量块标量（`|`）格式存储
 - **Fish 兼容格式** — 使用与 fish 相同的 YAML 风格格式（`- cmd: ...` / `  when: ...`）
+- **彩色输出** — 序号、时间戳、命令通过 `owo-colors` 着色，`less -R` 直接渲染
 - **本地时区显示** — 时间戳按本机时区显示，默认最新在前
 - **`less` 分页器** — stdout 是终端时自动 pipe 到 `less -R -F -X`
 - **搜索与删除** — 支持包含、精确、前缀三种匹配模式，区分/忽略大小写
@@ -69,9 +70,14 @@ cchistory --version
 ```bash
 # 浏览所有记录的命令（通过 less 分页）
 cchistory
+   1  git status
+   2  cargo build --release
+   3  gh pr create --title "Fix bug"
 
 # 最近 20 条，带时间戳
 cchistory show -n 20 -t
+   1  2024-05-13 12:00:00  git status
+   2  2024-05-13 12:00:01  cargo build --release
 
 # 搜索 git 相关命令
 cchistory search git

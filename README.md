@@ -22,6 +22,7 @@ Multiple concurrent Claude Code sessions are safe via `flock` file locking; each
 - **Automatic recording** — hook into Claude Code's `PostToolUse` event, no manual steps after setup
 - **Multi-line commands** — heredocs, backslash continuations stored via YAML block scalar (`|`) format
 - **Fish-compatible format** — history stored in the same YAML-like format fish uses (`- cmd: ...` / `  when: ...`)
+- **Colored output** — line numbers, timestamps, and commands colorized via `owo-colors`; renders in `less -R`
 - **Local timezone display** — timestamps shown in your machine's local time, newest-first by default
 - **`less` pager** — output pipes through `less -R -F -X` when stdout is a terminal
 - **Search & delete** — contains, exact, and prefix matching; case-sensitive or insensitive
@@ -70,9 +71,14 @@ cchistory --version
 ```bash
 # Browse all recorded commands (opens in less pager)
 cchistory
+   1  git status
+   2  cargo build --release
+   3  gh pr create --title "Fix bug"
 
 # Show the last 20 entries with timestamps
 cchistory show -n 20 -t
+   1  2024-05-13 12:00:00  git status
+   2  2024-05-13 12:00:01  cargo build --release
 
 # Search for git commands
 cchistory search git

@@ -316,8 +316,12 @@ fn make_predicate(
 
 // ---- Formatting for display ----
 
-/// Format a single entry for display
-pub fn format_entry(entry: &Entry, show_time: bool) -> String {
+use owo_colors::OwoColorize as _;
+
+pub fn format_entry(entry: &Entry, index: usize, show_time: bool) -> String {
+    let num = format!("{:>4}", index).dimmed().to_string();
+    let cmd = entry.command.default_color().to_string();
+
     if show_time {
         let dt = chrono::DateTime::from_timestamp(entry.when, 0)
             .map(|dt| {
@@ -326,9 +330,10 @@ pub fn format_entry(entry: &Entry, show_time: bool) -> String {
                     .to_string()
             })
             .unwrap_or_else(|| entry.when.to_string());
-        format!("  {}  {}", dt, entry.command)
+        let ts = dt.cyan().to_string();
+        format!("{}  {}  {}", num, ts, cmd)
     } else {
-        entry.command.clone()
+        format!("{}  {}", num, cmd)
     }
 }
 
@@ -621,7 +626,9 @@ mod tests {
             cwd: None,
             exit_code: None,
         };
-        assert_eq!(format_entry(&entry, false), "git status");
+        let formatted = format_entry(&entry, 1, false);
+        assert!(formatted.contains("git status"));
+        assert!(formatted.contains("1"));
     }
 
     #[test]
@@ -632,8 +639,7 @@ mod tests {
             cwd: None,
             exit_code: None,
         };
-        let formatted = format_entry(&entry, true);
-        // Should contain the datetime (2024-05-13) and the command
+        let formatted = format_entry(&entry, 1, true);
         assert!(formatted.contains("git status"));
         assert!(
             formatted.contains("2024-05-13"),
