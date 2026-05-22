@@ -51,10 +51,10 @@ enum Commands {
         #[arg(short = 'C', long = "case-sensitive")]
         case_sensitive: bool,
         /// Exact match (default: contains)
-        #[arg(short = 'e', long = "exact")]
+        #[arg(short = 'e', long = "exact", conflicts_with = "prefix")]
         exact: bool,
         /// Prefix match (default: contains)
-        #[arg(short = 'p', long = "prefix")]
+        #[arg(short = 'p', long = "prefix", conflicts_with = "exact")]
         prefix: bool,
     },
     /// Delete commands matching a pattern (default: exact match, like fish)
@@ -65,10 +65,10 @@ enum Commands {
         #[arg(short = 'C', long = "case-sensitive")]
         case_sensitive: bool,
         /// Substring / contains match (opt-in; default is exact)
-        #[arg(short = 'c', long = "contains")]
+        #[arg(short = 'c', long = "contains", conflicts_with = "prefix")]
         contains: bool,
         /// Prefix match (opt-in; default is exact)
-        #[arg(short = 'p', long = "prefix")]
+        #[arg(short = 'p', long = "prefix", conflicts_with = "contains")]
         prefix: bool,
     },
     /// Clear all command history
@@ -165,6 +165,9 @@ fn main() -> Result<()> {
             if from_stdin {
                 append_from_stdin()?;
             } else if let Some(cmd) = command_str {
+                if cmd.is_empty() {
+                    return Ok(());
+                }
                 let entry = Entry {
                     command: cmd,
                     when: chrono::Utc::now().timestamp(),
@@ -174,8 +177,7 @@ fn main() -> Result<()> {
                 let hist = History::new()?;
                 hist.append(&entry)?;
             } else {
-                eprintln!("Error: either --stdin or --command is required for append");
-                std::process::exit(1);
+                anyhow::bail!("either --stdin or --command is required for append");
             }
         }
         Commands::Merge { file } => {
@@ -183,10 +185,11 @@ fn main() -> Result<()> {
             let count = if let Some(ref path) = file {
                 hist.merge_file(path)?
             } else if io::stdin().is_terminal() {
-                eprintln!("Error: merge requires a file argument or piped input from stdin");
-                eprintln!("Usage: cchistory merge <FILE>");
-                eprintln!("       some_command | cchistory merge");
-                std::process::exit(1);
+                anyhow::bail!(
+                    "merge requires a file argument or piped input from stdin\n\
+                     Usage: cchistory merge <FILE>\n\
+                            some_command | cchistory merge"
+                );
             } else {
                 hist.merge_stdin()?
             };
@@ -264,7 +267,7 @@ fn append_from_stdin() -> Result<()> {
     Ok(())
 }
 
-/// Display entries through a pager (less) if stdout is a terminal.
+/// Display entries through a pager if stdout is a terminal.
 fn display_with_pager(entries: &[Entry], show_time: bool) -> Result<()> {
     let output = entries
         .iter()
@@ -274,18 +277,33 @@ fn display_with_pager(entries: &[Entry], show_time: bool) -> Result<()> {
         .join("\n\n");
 
     let stdout = io::stdout();
-    if stdout.is_terminal() && !entries.is_empty() {
-        let mut pager = Command::new("less")
-            .args(["-R", "-F", "-X"])
-            .stdin(Stdio::piped())
-            .spawn()?;
-
-        if let Some(ref mut stdin) = pager.stdin {
-            stdin.write_all(output.as_bytes())?;
-        }
-        pager.wait()?;
-    } else {
+    if !stdout.is_terminal() || entries.is_empty() {
         println!("{}", output);
+        return Ok(());
     }
+
+    let pager_cmd = std::env::var("PAGER").unwrap_or_else(|_| "less".into());
+    // Parse the pager command (may include args, e.g. "less -R")
+    let parts: Vec<&str> = pager_cmd.split_whitespace().collect();
+    let (prog, args) = parts.split_first().unwrap();
+
+    let mut pager = match Command::new(prog)
+        .args(args)
+        .args(["-R", "-F", "-X"])
+        .stdin(Stdio::piped())
+        .spawn()
+    {
+        Ok(p) => p,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            println!("{}", output);
+            return Ok(());
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    if let Some(ref mut stdin) = pager.stdin {
+        stdin.write_all(output.as_bytes())?;
+    }
+    pager.wait()?;
     Ok(())
 }

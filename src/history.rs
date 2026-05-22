@@ -1,5 +1,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 
 use fs2::FileExt;
@@ -54,10 +56,14 @@ impl History {
     pub fn new() -> io::Result<Self> {
         let path = history_path();
         ensure_parent(&path)?;
-        // Create file if it doesn't exist
-        if !path.exists() {
-            File::create(&path)?;
+        // Atomically create with restricted permissions if it doesn't exist
+        let mut opts = OpenOptions::new();
+        opts.write(true).create(true);
+        #[cfg(unix)]
+        {
+            opts.mode(0o600);
         }
+        opts.open(&path)?;
         Ok(Self { path })
     }
 
@@ -70,14 +76,22 @@ impl History {
 
     /// Open the history file for writing with an exclusive lock.
     fn open_write(&self) -> io::Result<File> {
-        let file = OpenOptions::new().read(true).write(true).open(&self.path)?;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&self.path)?;
         file.lock_exclusive()?;
         Ok(file)
     }
 
     /// Append a single entry to the history file. Uses exclusive lock.
     pub fn append(&self, entry: &Entry) -> io::Result<()> {
-        let mut file = OpenOptions::new().append(true).open(&self.path)?;
+        let mut file = OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&self.path)?;
         file.lock_exclusive()?;
         write_entry(&mut file, entry)?;
         file.flush()?;
@@ -117,11 +131,14 @@ impl History {
         let pred = make_predicate(pattern, mode, case_sensitive);
         let (keep, removed): (Vec<_>, Vec<_>) = entries.into_iter().partition(|e| !pred(e));
 
+        // Serialize to memory before truncating to avoid data loss on write error
+        let mut buf = Vec::new();
+        for entry in &keep {
+            write_entry(&mut buf, entry)?;
+        }
         file.set_len(0)?;
         file.seek(SeekFrom::Start(0))?;
-        for entry in &keep {
-            write_entry(&mut file, entry)?;
-        }
+        file.write_all(&buf)?;
         file.flush()?;
         Ok(removed.len())
     }
@@ -137,7 +154,10 @@ impl History {
     pub fn merge<R: Read>(&self, reader: R) -> io::Result<usize> {
         let incoming = parse_all(BufReader::new(reader))?;
         let count = incoming.len();
-        let mut file = OpenOptions::new().append(true).open(&self.path)?;
+        let mut file = OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&self.path)?;
         file.lock_exclusive()?;
         for entry in &incoming {
             write_entry(&mut file, entry)?;
@@ -154,7 +174,15 @@ impl History {
 
     /// Load entries from a specific file (for merge from file).
     pub fn merge_file(&self, file_path: &str) -> io::Result<usize> {
-        let file = File::open(file_path)?;
+        let src = std::fs::canonicalize(file_path)?;
+        let dst = std::fs::canonicalize(&self.path)?;
+        if src == dst {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cannot merge history file into itself",
+            ));
+        }
+        let file = File::open(&src)?;
         self.merge(file)
     }
 }
@@ -202,22 +230,28 @@ fn parse_all<R: BufRead>(reader: R) -> io::Result<Vec<Entry>> {
         } else if let Some(stripped) = line.strip_prefix("  exit_code: ") {
             current.exit_code = stripped.parse().ok();
         } else if line.starts_with("  paths:") {
-            // fish compat: skip paths block
-            while let Some(next) = lines.next() {
-                let next = next?;
+            // fish compat: skip paths block; re-process the first non-path line
+            while let Some(Ok(next)) = lines.next() {
                 if !next.starts_with("    - ") && !next.trim().is_empty() {
-                    if next == "- cmd: |" {
-                        if let Some(entry) = current.build() {
-                            entries.push(entry);
-                        }
-                        current = EntryBuilder::new();
-                        in_block = true;
-                    } else if let Some(stripped) = next.strip_prefix("- cmd: ") {
+                    // Process the first non-path line as a top-level directive
+                    if let Some(stripped) = next.strip_prefix("- cmd: ") {
                         if let Some(entry) = current.build() {
                             entries.push(entry);
                         }
                         current = EntryBuilder::new();
                         current.command = Some(stripped.to_string());
+                    } else if next == "- cmd: |" {
+                        if let Some(entry) = current.build() {
+                            entries.push(entry);
+                        }
+                        current = EntryBuilder::new();
+                        in_block = true;
+                    } else if let Some(stripped) = next.strip_prefix("  when: ") {
+                        current.when = stripped.parse().ok();
+                    } else if let Some(stripped) = next.strip_prefix("  cwd: ") {
+                        current.cwd = Some(stripped.to_string());
+                    } else if let Some(stripped) = next.strip_prefix("  exit_code: ") {
+                        current.exit_code = stripped.parse().ok();
                     }
                     break;
                 }
@@ -271,6 +305,10 @@ fn write_entry<W: Write>(writer: &mut W, entry: &Entry) -> io::Result<()> {
         writeln!(writer, "- cmd: |")?;
         for line in entry.command.lines() {
             writeln!(writer, "    {}", line)?;
+        }
+        // Preserve trailing newline so round-trip is byte-for-byte
+        if entry.command.ends_with('\n') {
+            writeln!(writer, "    ")?;
         }
     } else {
         writeln!(writer, "- cmd: {}", entry.command)?;
@@ -678,9 +716,13 @@ mod tests {
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
             }
-            if !path.exists() {
-                File::create(&path)?;
+            let mut opts = OpenOptions::new();
+            opts.write(true).create(true);
+            #[cfg(unix)]
+            {
+                opts.mode(0o600);
             }
+            opts.open(&path)?;
             Ok(Self { path })
         }
     }

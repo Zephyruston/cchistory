@@ -49,7 +49,26 @@ cargo build --release    # release build → target/release/cchistory
 cargo test               # run tests (if any)
 ```
 
-20 unit tests covering parse/format round-trip, search modes (contains/exact/prefix), case sensitivity, history file operations (append/delete/clear/merge), and thread-safe temp file isolation. Manual smoke tests: `cchistory append -m "test cmd" && cchistory show`.
+25 unit tests covering parse/format round-trip, search modes (contains/exact/prefix), case sensitivity, history file operations (append/delete/clear/merge), and thread-safe temp file isolation. Manual smoke tests: `cchistory append -m "test cmd" && cchistory show`.
+
+## Pre-commit / pre-push hooks
+
+This project uses [prek](https://pre-commit.com/) with hooks defined in `.pre-commit-config.yaml`.
+
+```bash
+prek install              # install the git hooks
+prek run --all-files      # run all hooks on all files
+prek run --stage pre-push # run pre-push stage only
+```
+
+**pre-commit** (on every commit):
+- `cargo fmt` — format code
+- `cargo clippy` — lint with `-D warnings`
+
+**pre-push** (same as pre-commit, plus):
+- `cargo nextest run --all-features` — run tests (includes ignored)
+- `cargo build --locked` — verify build with locked dependencies
+- `cargo check --all` — check all targets compile
 
 ## Architecture
 
