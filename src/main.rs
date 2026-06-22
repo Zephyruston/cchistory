@@ -102,6 +102,10 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
+    run()
+}
+
+fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command.unwrap_or(Commands::Show {
@@ -149,12 +153,12 @@ fn main() -> Result<()> {
                 SearchMode::Exact
             };
             let count = hist.delete(&pattern, mode, case_sensitive)?;
-            println!("Deleted {} entries", count);
+            out(&format!("Deleted {} entries", count))?;
         }
         Commands::Clear => {
             let hist = History::new()?;
             hist.clear()?;
-            println!("History cleared");
+            out("History cleared")?;
         }
         Commands::Append {
             command_str,
@@ -193,7 +197,7 @@ fn main() -> Result<()> {
             } else {
                 hist.merge_stdin()?
             };
-            println!("Merged {} entries", count);
+            out(&format!("Merged {} entries", count))?;
         }
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
@@ -278,7 +282,7 @@ fn display_with_pager(entries: &[Entry], show_time: bool) -> Result<()> {
 
     let stdout = io::stdout();
     if !stdout.is_terminal() || entries.is_empty() {
-        println!("{}", output);
+        out(&output)?;
         return Ok(());
     }
 
@@ -295,15 +299,44 @@ fn display_with_pager(entries: &[Entry], show_time: bool) -> Result<()> {
     {
         Ok(p) => p,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            println!("{}", output);
+            out(&output)?;
             return Ok(());
         }
         Err(e) => return Err(e.into()),
     };
 
     if let Some(ref mut stdin) = pager.stdin {
-        stdin.write_all(output.as_bytes())?;
+        // pager 可能在写完前退出（less -F 内容一屏装满即退、用户按 q 退出），
+        // 此时 BrokenPipe 属预期，忽略即可；其他写错误正常上抛。
+        if let Err(e) = stdin.write_all(output.as_bytes())
+            && e.kind() != io::ErrorKind::BrokenPipe
+        {
+            return Err(e.into());
+        }
     }
-    pager.wait()?;
+    let _ = pager.wait();
     Ok(())
+}
+
+/// 写一行到 stdout，忽略 BrokenPipe（下游管道/pager 关闭属正常退出，不当错误）。
+/// 用它替代 `println!`：后者遇 broken pipe 会 panic，这里转为静默成功。
+fn out(line: &str) -> Result<()> {
+    let stdout = io::stdout();
+    let mut handle = stdout.lock();
+    match writeln!(handle, "{}", line) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn out_does_not_panic_on_normal_write() {
+        // 正常写入 happy path；BrokenPipe 难以在单测模拟，由 smoke 测试覆盖。
+        out("cchistory test line").unwrap();
+    }
 }
