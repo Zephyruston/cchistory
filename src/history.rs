@@ -4,25 +4,14 @@ use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 
-use fs2::FileExt;
-
-/// Where history is stored: `$XDG_DATA_HOME/cchistory/history` or `~/.local/share/cchistory/history`
+/// Where history is stored: `$XDG_DATA_HOME/cchistory/history` (or the platform equivalent
+/// via `dirs::data_dir()` — e.g. `~/Library/Application Support` on macOS, `%APPDATA%` on
+/// Windows), defaulting to `~/.local/share/cchistory/history` on Linux.
 fn history_path() -> PathBuf {
-    if let Ok(dir) = std::env::var("XDG_DATA_HOME") {
-        PathBuf::from(dir).join("cchistory").join("history")
-    } else {
-        let home = dirs_fallback();
-        home.join(".local")
-            .join("share")
-            .join("cchistory")
-            .join("history")
-    }
-}
-
-fn dirs_fallback() -> PathBuf {
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
+    dirs::data_dir()
+        .expect("无法确定数据目录（HOME 未设）")
+        .join("cchistory")
+        .join("history")
 }
 
 fn ensure_parent(path: &std::path::Path) -> io::Result<()> {
@@ -82,7 +71,7 @@ impl History {
             .create(true)
             .truncate(false)
             .open(&self.path)?;
-        file.lock_exclusive()?;
+        file.lock()?;
         Ok(file)
     }
 
@@ -92,7 +81,7 @@ impl History {
             .append(true)
             .create(true)
             .open(&self.path)?;
-        file.lock_exclusive()?;
+        file.lock()?;
         write_entry(&mut file, entry)?;
         file.flush()?;
         Ok(())
@@ -158,7 +147,7 @@ impl History {
             .append(true)
             .create(true)
             .open(&self.path)?;
-        file.lock_exclusive()?;
+        file.lock()?;
         for entry in &incoming {
             write_entry(&mut file, entry)?;
         }
@@ -688,23 +677,11 @@ mod tests {
 
     // -- History file operation tests (use temp file) --
 
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-    fn temp_history() -> (History, std::path::PathBuf) {
-        let n = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("cchistory_test_{}_{}", std::process::id(), n));
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("history");
-        let hist = History::with_path(path.clone()).unwrap();
-        (hist, path)
-    }
-
-    fn cleanup(path: &std::path::Path) {
-        let _ = std::fs::remove_file(path);
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::remove_dir(parent);
-        }
+    fn temp_history() -> (History, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history");
+        let hist = History::with_path(path).unwrap();
+        (hist, dir)
     }
 
     // We need a way to create History with a specific path for testing.
@@ -729,7 +706,7 @@ mod tests {
 
     #[test]
     fn append_and_read() {
-        let (hist, path) = temp_history();
+        let (hist, _dir) = temp_history();
         let entry = Entry {
             command: "echo test".into(),
             when: 1715600000,
@@ -741,12 +718,11 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].command, "echo test");
         assert_eq!(entries[0].cwd.as_deref(), Some("/tmp"));
-        cleanup(&path);
     }
 
     #[test]
     fn search_in_history() {
-        let (hist, path) = temp_history();
+        let (hist, _dir) = temp_history();
         for cmd in &["git status", "cargo build", "git push"] {
             hist.append(&Entry {
                 command: cmd.to_string(),
@@ -758,12 +734,11 @@ mod tests {
         }
         let results = hist.search("git", SearchMode::Contains, false).unwrap();
         assert_eq!(results.len(), 2);
-        cleanup(&path);
     }
 
     #[test]
     fn search_exact_in_history() {
-        let (hist, path) = temp_history();
+        let (hist, _dir) = temp_history();
         for cmd in &["git status", "git status -v", "cargo build"] {
             hist.append(&Entry {
                 command: cmd.to_string(),
@@ -776,12 +751,11 @@ mod tests {
         let results = hist.search("git status", SearchMode::Exact, false).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].command, "git status");
-        cleanup(&path);
     }
 
     #[test]
     fn delete_entries() {
-        let (hist, path) = temp_history();
+        let (hist, _dir) = temp_history();
         for cmd in &["git status", "npm install", "git push"] {
             hist.append(&Entry {
                 command: cmd.to_string(),
@@ -796,12 +770,11 @@ mod tests {
         let remaining = hist.read_all().unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].command, "npm install");
-        cleanup(&path);
     }
 
     #[test]
     fn delete_default_is_exact() {
-        let (hist, path) = temp_history();
+        let (hist, _dir) = temp_history();
         for cmd in &["git status", "git status -v", "cargo build"] {
             hist.append(&Entry {
                 command: cmd.to_string(),
@@ -816,12 +789,11 @@ mod tests {
         assert_eq!(count, 1);
         let remaining = hist.read_all().unwrap();
         assert_eq!(remaining.len(), 2);
-        cleanup(&path);
     }
 
     #[test]
     fn clear_history() {
-        let (hist, path) = temp_history();
+        let (hist, _dir) = temp_history();
         for cmd in &["cmd1", "cmd2", "cmd3"] {
             hist.append(&Entry {
                 command: cmd.to_string(),
@@ -834,12 +806,11 @@ mod tests {
         hist.clear().unwrap();
         let entries = hist.read_all().unwrap();
         assert_eq!(entries.len(), 0);
-        cleanup(&path);
     }
 
     #[test]
     fn merge_entries() {
-        let (hist, path) = temp_history();
+        let (hist, _dir) = temp_history();
         // Add one entry directly
         hist.append(&Entry {
             command: "existing".into(),
@@ -857,7 +828,6 @@ mod tests {
         assert_eq!(entries[0].command, "existing");
         assert_eq!(entries[1].command, "merged_one");
         assert_eq!(entries[2].command, "merged_two");
-        cleanup(&path);
     }
 
     #[test]

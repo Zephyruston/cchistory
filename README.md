@@ -7,7 +7,7 @@
 [English](README.md) | [中文](README_CN.md)
 
 [![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](LICENSE)
-[![Rust](https://img.shields.io/badge/Rust->=1.85-3c873a?style=flat-square)](https://rust-lang.org)
+[![Rust](https://img.shields.io/badge/Rust->=1.96-3c873a?style=flat-square)](https://rust-lang.org)
 
 [Features](#features) • [Installation](#installation) • [Usage](#usage) • [How it works](#how-it-works) • [CLI Reference](#cli-reference)
 
